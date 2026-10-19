@@ -1,7 +1,5 @@
 import type { EngineInterface } from 'claude-code'
 
-import type { SleepStatus } from '../types'
-
 export const PMSET = '/usr/bin/pmset'
 export const RULE_FILE = '/etc/sudoers.d/keep-awake'
 const SUDO = '/usr/bin/sudo'
@@ -30,7 +28,9 @@ async function isAllowedWithoutPassword($: EngineInterface, isPreventingSleep: b
   return listed.exitCode === 0
 }
 
-export async function readSleepStatus($: EngineInterface): Promise<SleepStatus> {
+export type SystemStatus = { kind: 'unsupported' } | { kind: 'read'; isPreventingSleep: boolean; isPasswordless: boolean }
+
+export async function readSystemStatus($: EngineInterface): Promise<SystemStatus> {
   const hasPmset = await $.fs.stat(PMSET).then(() => true, () => false)
   if (!hasPmset) return { kind: 'unsupported' }
 

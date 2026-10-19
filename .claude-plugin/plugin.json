@@ -1,7 +1,7 @@
 {
   "name": "keep-awake",
-  "version": "0.1.0",
-  "description": "Keep your Mac awake, lid closed included (pmset disablesleep), from a button above the prompt or /awake.",
+  "version": "0.2.0",
+  "description": "Keep your Mac awake, lid closed included (pmset disablesleep), while Claude works or always, from buttons above the prompt or /awake.",
   "author": { "name": "Emre Geçit" },
   "repository": "https://github.com/gecitemre/claude-keep-awake",
   "license": "MIT",

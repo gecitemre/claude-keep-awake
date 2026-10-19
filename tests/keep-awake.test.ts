@@ -15,10 +15,15 @@ const BAND = {
   },
 } as const
 
+const HOLD = '/Users/tester/.claude/keep-awake'
+const CLAUDE_PID = '4242'
+
 type FakeMac = {
   isSleepDisabled: boolean
   hasRule: boolean
   isDialogCancelled?: boolean
+  files: Map<string, string>
+  livePids: Set<string>
   ran: string[][]
   dialogs: string[]
   toasts: string[]
@@ -26,11 +31,15 @@ type FakeMac = {
 
 const newMac = (fields: Pick<FakeMac, 'hasRule'> & Partial<FakeMac>): FakeMac => ({
   isSleepDisabled: false,
+  files: new Map(),
+  livePids: new Set([CLAUDE_PID]),
   ran: [],
   dialogs: [],
   toasts: [],
   ...fields,
 })
+
+const pmsetWrites = (mac: FakeMac) => mac.ran.filter(argv => argv[0] === '/usr/bin/sudo' && !argv.includes('-l'))
 
 const exited = (exitCode: number, stdout: string, stderr = '') => ({
   value: { exitCode, stdout, stderr, isStdoutTruncated: false, isStderrTruncated: false },
@@ -43,6 +52,10 @@ function answer(mac: FakeMac, argv: string[]) {
   }
   if (command === '/usr/bin/pmset -g assertions') return exited(0, 'Listed by owning process:\n')
   if (command === '/usr/bin/id -un') return exited(0, 'tester\n')
+  if (command === '/bin/sh -c echo $PPID') return exited(0, `${CLAUDE_PID}\n`)
+  if (argv[0] === '/bin/mkdir') return exited(0, '')
+  if (argv[0] === '/bin/rm' && argv[2]?.startsWith(HOLD)) return exited(0, '', String(mac.files.delete(argv[2])))
+  if (argv[0] === '/bin/kill') return exited(mac.livePids.has(argv[2] ?? '') ? 0 : 1, '')
   if (argv[0] === '/usr/bin/osascript') return answerDialog(mac, argv.at(-2) ?? '')
   if (argv[0] !== '/usr/bin/sudo') throw new Error(`unexpected command: ${command}`)
   if (!mac.hasRule) return exited(1, '', 'sudo: a password is required\n')
@@ -75,6 +88,19 @@ function fakeMac(on: On, mac: FakeMac) {
     return { value: undefined }
   })
   on('fs.stat', () => ({ value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false } }))
+  mock.env(on, { HOME: '/Users/tester' })
+  on('fs.write', ($, e) => {
+    mac.files.set(e.path, e.text)
+
+    return { value: undefined }
+  })
+  on('fs.read', ($, e) => ({ value: mac.files.get(e.path) ?? '' }))
+  on('fs.exists', ($, e) => ({ value: [...mac.files.keys()].some(path => path === e.path || path.startsWith(`${e.path}/`)) }))
+  on('fs.list', ($, e) => ({
+    value: [...mac.files.keys()]
+      .filter(path => path.startsWith(`${e.path}/`))
+      .map(path => ({ name: path.slice(e.path.length + 1), kind: 'file' as const, size: 0, mtimeMs: 0, isLink: false })),
+  }))
   on('process.run', ($, e) => {
     mac.ran.push([...e.argv])
 
@@ -172,7 +198,7 @@ test('setup install adds a visudo-checked rule that later changes use, and remov
   expect(mac.dialogs).toHaveLength(1)
   expect(mac.ran).toContainEqual(['/usr/bin/sudo', '-n', '/usr/bin/pmset', '-a', 'disablesleep', '1'])
 
-  expect(await awakeCommand($, 'setup remove')).toContain('asks for your password again and is still on')
+  expect(await awakeCommand($, 'setup remove')).toContain('asks for your password again and is on')
   expect(mac.hasRule).toBe(false)
 })
 
@@ -198,6 +224,7 @@ test('a change made in another session reaches this band through the power notif
     return { value: { code: 0, signal: null } }
   })
   on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.id', () => ({ value: 'session-a' }))
   on('session.start', ($, e) => ({ cwd: e.cwd }))
   await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
   await clock.settle()
@@ -209,4 +236,110 @@ test('a change made in another session reaches this band through the power notif
   await clock.settle()
 
   expect((await ui.find({ key: 'toggle-sleep' }))?.text).toBe('☕ Always awake: on')
+})
+
+async function startSession($: Engine, on: On, clock: { settle: () => Promise<void> }) {
+  // notifyutil ends at once: these tests drive the turns, not the power notification.
+  on('process.spawn', async function* () {
+    return { value: { code: 0, signal: null } }
+  })
+  on('command.register', ($, e) => ({ value: { command: e.name } }))
+  on('session.id', () => ({ value: 'session-a' }))
+  on('session.start', ($, e) => ({ cwd: e.cwd }))
+  on('turn.start', ($, e) => ({ turnId: e.turnId }))
+  on('turn.complete', ($, e) => ({ text: e.answer }))
+  on('classic.Stop', () => ({}))
+  await $.session.start({ cwd: '/', surface: 'terminal', isInteractive: true })
+  await clock.settle()
+}
+
+async function runTurn($: Engine, clock: { settle: () => Promise<void> }, turnId: string, onWork: () => Promise<void>) {
+  await $.turn.start({ text: 'go', turnId })
+  await clock.settle()
+  await onWork()
+  await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId, reason: 'answer' })
+  await clock.settle()
+}
+
+test('while Claude works, a turn keeps the Mac awake and its end lets it sleep', async ($, on) => {
+  const mac = newMac({ hasRule: true })
+  const clock = fakeMac(on, mac)
+  await startSession($, on, clock)
+
+  await runTurn($, clock, 't1', async () => {
+    expect(mac.isSleepDisabled).toBe(true)
+    expect(mac.files.get(`${HOLD}/holders/session-a`)).toBe(CLAUDE_PID)
+    expect(mac.files.has(`${HOLD}/auto-held`)).toBe(true)
+  })
+
+  expect(mac.isSleepDisabled).toBe(false)
+  expect(mac.files.size).toBe(0)
+})
+
+test('another working session keeps the Mac awake after this turn ends', async ($, on) => {
+  const mac = newMac({ hasRule: true, livePids: new Set([CLAUDE_PID, '777']) })
+  const clock = fakeMac(on, mac)
+  await startSession($, on, clock)
+
+  await runTurn($, clock, 't1', async () => {
+    mac.files.set(`${HOLD}/holders/session-b`, '777')
+  })
+  expect(mac.isSleepDisabled).toBe(true)
+
+  mac.livePids.delete('777')
+  await runTurn($, clock, 't2', async () => {})
+  expect(mac.isSleepDisabled).toBe(false)
+  expect(mac.files.has(`${HOLD}/holders/session-b`)).toBe(false)
+})
+
+test('while Claude works never turns off an Always awake set by hand', async ($, on) => {
+  const mac = newMac({ hasRule: true, isSleepDisabled: true })
+  const clock = fakeMac(on, mac)
+  await startSession($, on, clock)
+
+  await runTurn($, clock, 't1', async () => {})
+
+  expect(mac.isSleepDisabled).toBe(true)
+  expect(pmsetWrites(mac)).toEqual([])
+})
+
+test('without the passwordless rule while Claude works waits and opens no dialog', async ($, on) => {
+  const mac = newMac({ hasRule: false })
+  const clock = fakeMac(on, mac)
+  await startSession($, on, clock)
+
+  await runTurn($, clock, 't1', async () => expect(mac.isSleepDisabled).toBe(false))
+
+  expect(mac.dialogs).toEqual([])
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  expect(await ui.find({ type: 'Text', text: 'needs /awake setup install' })).toBeDefined()
+})
+
+test('turning while Claude works off ends its hold at once', async ($, on) => {
+  const mac = newMac({ hasRule: true })
+  const clock = fakeMac(on, mac)
+  await startSession($, on, clock)
+
+  await runTurn($, clock, 't1', async () => {
+    expect(await awakeCommand($, 'working off')).toContain('off')
+    expect(mac.isSleepDisabled).toBe(false)
+  })
+  expect(mac.files.has(`${HOLD}/while-working-off`)).toBe(true)
+})
+
+test('background work a turn leaves running keeps the Mac awake until a later turn reports none', async ($, on) => {
+  const mac = newMac({ hasRule: true })
+  const clock = fakeMac(on, mac)
+  await startSession($, on, clock)
+  const shell = { id: 'b1', type: 'local_bash', status: 'running', description: 'npm test' }
+
+  await runTurn($, clock, 't1', async () => {
+    await $.classic.Stop({ stop_hook_active: false, background_tasks: [shell] })
+  })
+  expect(mac.isSleepDisabled).toBe(true)
+
+  await runTurn($, clock, 't2', async () => {
+    await $.classic.Stop({ stop_hook_active: false, background_tasks: [] })
+  })
+  expect(mac.isSleepDisabled).toBe(false)
 })
