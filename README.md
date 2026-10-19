@@ -2,6 +2,8 @@
 
 A Claude Code mod that keeps your Mac awake, **lid closed included**, from a button above the prompt or `/awake`.
 
+![The Always awake button above the Claude Code prompt](docs/screenshot.png)
+
 > Unofficial community mod, not affiliated with Anthropic. macOS only. Built on the Claude Code Mods API (early access), tested with Claude Code 2.1.299.
 
 It switches macOS's `pmset disablesleep`, which stops all system sleep until you turn it off, across restarts. The Claude desktop app's own "Keep computer awake while Claude works" setting prevents idle sleep while a session works; this covers the closed lid and the time in between, in the terminal and the desktop app alike.
