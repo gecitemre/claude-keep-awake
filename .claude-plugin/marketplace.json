@@ -1,0 +1,6 @@
+{
+  "name": "keep-awake",
+  "description": "keep-awake: a Claude Code mod that keeps your Mac awake, lid closed included.",
+  "owner": { "name": "Emre Geçit" },
+  "plugins": [{ "name": "keep-awake", "source": "./" }]
+}
