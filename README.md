@@ -8,10 +8,10 @@ A Claude Code mod that keeps your Mac awake, **lid closed included**, from a but
 
 It switches macOS's `pmset disablesleep`, which stops all system sleep, closed lid included. The Claude desktop app's own "Keep computer awake while Claude works" setting only prevents idle sleep, so a closed lid still sleeps; this covers the lid, in the terminal and the desktop app alike.
 
-The band above the prompt has two buttons; the one that is on uses the primary style:
+The band above the prompt has two buttons, never on together: turning one on turns the other off, and the one that is on uses the primary style.
 
-- **`☕ While Claude works`** (default): awake while a session's turn runs, or background work it started (a background shell, monitor or agent), then the Mac sleeps as usual. It switches at every turn, so it acts only after `/awake setup install`; until then the band says so and nothing asks for a password.
 - **`☕ Always awake`**: awake until you turn it off.
+- **`☕ Awake while Claude works`** (default): awake while a session's turn runs, or background work it started (a background shell, monitor or agent), then the Mac sleeps as usual. It switches at every turn, so it acts only after `/awake setup install`; until then the band says so and nothing asks for a password.
 
 ## Install
 
@@ -32,10 +32,10 @@ In the desktop app: click + next to the prompt box, then Plugins, Add marketplac
 ## Usage
 
 ```
-/awake working on       keep the Mac awake while Claude works (the default)
-/awake working off      stop doing that
-/awake on               Always awake (pmset disablesleep 1)
+/awake on               Always awake (pmset disablesleep 1); turns Awake while Claude works off
 /awake off              turn Always awake off (pmset disablesleep 0)
+/awake working on       Awake while Claude works (the default); turns Always awake off
+/awake working off      turn Awake while Claude works off
 /awake status           the real setting, both modes, whether a password is needed, the recorded original value
 /awake restore          return to the value from before keep-awake first changed it
 /awake setup            explain passwordless switching
@@ -55,7 +55,7 @@ To switch without the dialog, run `/awake setup install`. macOS asks for your pa
 
 The file is checked with `visudo -cf` before it is installed and the whole configuration with `visudo -c` after; if that fails, the file is removed again. Nothing else in sudoers is touched. `/awake setup remove` deletes it.
 
-## How "while Claude works" is detected
+## How "Awake while Claude works" detects work
 
 - A session is working from `turn.start` to `turn.complete` of its main loop, and after that while the turn's `Stop` event still lists background tasks. Such work starts a new turn when it finishes, which checks again.
 - `disablesleep` is one value for the whole Mac, so every working session leaves a holder file, `~/.claude/keep-awake/holders/<session id>`, naming its Claude Code process. The Mac sleeps again once no holder's process is alive.

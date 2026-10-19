@@ -38,6 +38,8 @@ const onOff = (isOn: boolean) => (isOn ? 'on' : 'off')
 
 type ReadStatus = SleepStatus & { kind: 'read' }
 const isAlwaysAwake = (current: ReadStatus) => current.isPreventingSleep && !current.isAutoHeld
+// The two modes are never on together: Always awake already covers every turn.
+const isAwakeWhileWorking = (current: ReadStatus) => current.isWhileWorkingOn && !isAlwaysAwake(current)
 
 // This session's share of the while-working hold; a reload starts it over at session.start.
 let sessionId: string | undefined
@@ -107,12 +109,11 @@ async function changeAlwaysAwake($: EngineInterface, choose: (isAlwaysOn: boolea
     }
     // Turning it on takes over a while-working hold, so the end of the work leaves it on.
     await markAutoHeld($, false)
+    if (wanted) await setWhileWorking($, false)
 
     const after = await readUsableStatus($)
     if (after.isPreventingSleep !== wanted) throw new Error(`pmset still reports sleep prevention ${onOff(after.isPreventingSleep)}.`)
     await update($, error, () => null)
-    // Off by hand still leaves While Claude works to keep a running turn awake.
-    if (!wanted) await followClaudeWork($)
 
     return `Always awake is ${onOff(wanted)} (pmset disablesleep ${wanted ? 1 : 0}).`
   } catch (failure) {
@@ -163,12 +164,13 @@ function followClaudeWorkLater($: EngineInterface) {
 }
 
 async function changeWhileWorking($: EngineInterface, isOn: boolean) {
+  if (isOn && isAlwaysAwake(await readUsableStatus($))) await changeAlwaysAwake($, () => false)
   await setWhileWorking($, isOn)
   await followClaudeWork($)
   const current = await readUsableStatus($)
   const hint = isOn && !current.isPasswordless ? ' It acts once /awake setup install lets it switch without a password.' : ''
 
-  return `While Claude works is ${onOff(isOn)}.${hint}`
+  return `Awake while Claude works is ${onOff(isOn)}.${hint}`
 }
 
 async function restoreOriginalValue($: EngineInterface) {
@@ -182,7 +184,7 @@ async function restoreOriginalValue($: EngineInterface) {
 }
 
 function describeWhileWorking(current: ReadStatus) {
-  if (!current.isWhileWorkingOn) return 'off'
+  if (!isAwakeWhileWorking(current)) return 'off'
   if (!current.isPasswordless) return 'on, but waiting for /awake setup install'
 
   return current.isAutoHeld ? 'on, keeping the Mac awake now' : 'on, nothing running'
@@ -196,7 +198,7 @@ async function statusReport($: EngineInterface) {
 
   return [
     `Sleep prevention (pmset disablesleep, system-wide): ${onOff(current.isPreventingSleep)}`,
-    `While Claude works: ${describeWhileWorking(current)}`,
+    `Awake while Claude works: ${describeWhileWorking(current)}`,
     `Always awake: ${onOff(isAlwaysAwake(current))}`,
     `Password: ${current.isPasswordless ? `not needed (${RULE_FILE})` : 'macOS asks on each change; /awake setup explains how to skip it'}`,
     original
@@ -213,7 +215,7 @@ async function explainSetup($: EngineInterface) {
   }
 
   return [
-    'Always awake asks for your password in a macOS dialog on each change, and While Claude works waits until it needs none.',
+    'Always awake asks for your password in a macOS dialog on each change, and Awake while Claude works waits until it needs none.',
     `/awake setup install adds one visudo-checked file, ${RULE_FILE}:`,
     `  ${rule}`,
     'It allows only those two pmset commands. macOS asks for your password once to add it; keep-awake never sees it.',
@@ -377,22 +379,23 @@ export const register: Register = on => {
     const failure = await read($, error)
     const isBusy = await read($, isChanging)
     const isAlwaysOn = isAlwaysAwake(current)
+    const isWhileWorking = isAwakeWhileWorking(current)
 
     return (
       <Box gap={2}>
-        <Button
-          key="toggle-working"
-          variant={current.isWhileWorkingOn ? 'primary' : 'secondary'}
-          label={stateLabel('While Claude works', current.isWhileWorkingOn, false)}
-          onPress={() => pressing($, () => changeWhileWorking($, !current.isWhileWorkingOn))}
-        />
         <Button
           key="toggle-sleep"
           variant={isAlwaysOn ? 'primary' : 'secondary'}
           label={stateLabel('Always awake', isAlwaysOn, isBusy)}
           onPress={() => pressing($, () => changeAlwaysAwake($, isOn => !isOn))}
         />
-        {current.isWhileWorkingOn && !current.isPasswordless && <Text dimColor>needs /awake setup install</Text>}
+        <Button
+          key="toggle-working"
+          variant={isWhileWorking ? 'primary' : 'secondary'}
+          label={stateLabel('Awake while Claude works', isWhileWorking, false)}
+          onPress={() => pressing($, () => changeWhileWorking($, !isWhileWorking))}
+        />
+        {isWhileWorking && !current.isPasswordless && <Text dimColor>needs /awake setup install</Text>}
         {current.isAutoHeld && <Text dimColor>awake now</Text>}
         {failure !== null && <Text color="error">{failure}</Text>}
       </Box>

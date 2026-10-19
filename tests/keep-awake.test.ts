@@ -343,3 +343,23 @@ test('background work a turn leaves running keeps the Mac awake until a later tu
   })
   expect(mac.isSleepDisabled).toBe(false)
 })
+
+test('Always awake and Awake while Claude works are never on together', async ($, on) => {
+  const mac = newMac({ hasRule: true })
+  fakeMac(on, mac)
+  await awakeCommand($, 'status')
+  const ui = await $.ui.mount({ ...BAND, surface: 'terminal' })
+  const labels = async () => [
+    (await ui.find({ key: 'toggle-sleep' }))?.text,
+    (await ui.find({ key: 'toggle-working' }))?.text,
+  ]
+  expect(await labels()).toEqual(['🌙 Always awake: off', '☕ Awake while Claude works: on'])
+
+  await ui.press({ key: 'toggle-sleep' })
+  expect(mac.isSleepDisabled).toBe(true)
+  expect(await labels()).toEqual(['☕ Always awake: on', '🌙 Awake while Claude works: off'])
+
+  await ui.press({ key: 'toggle-working' })
+  expect(mac.isSleepDisabled).toBe(false)
+  expect(await labels()).toEqual(['🌙 Always awake: off', '☕ Awake while Claude works: on'])
+})
